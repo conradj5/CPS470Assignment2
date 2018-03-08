@@ -4,11 +4,13 @@ from dns_test import get_default_dns
 import struct
 import dns.resolver
 import dnslib
+import numpy
+import copy
 
 
 def dns_test():
     answers = dns.resolver.query(url, 'A')
-    request = dns.message.make_query("yahoo.com", dns.rdatatype.A)
+    request = dns.message.make_query(url, dns.rdatatype.A)
     # m = dns.message.Message()
     print("DNS Request: " + str(request.to_wire()))
     response = dns.query.udp(request, get_default_dns())
@@ -51,11 +53,75 @@ def test():
     data, addr = sock.recvfrom(1024)
     print("Test Response " + str(data))
     print("Test Response Headers: " + str(struct.unpack('!HHHHHH', data[:12])))
+    parseResp(bytearray(data), len(packet))
     sock.close()
 
+def testPtr(byte):
+    res = numpy.unpackbits(byte)
+    return res[0] == 1 and res[1] == 1
+
+def parseResp(buffer, lenReq):
+    # For the header
+    data = copy.deepcopy(buffer)
+    (id, bitmap, q, a, ns, ar) = struct.unpack("!HHHHHH", buffer[:12])
+
+    # Remove the total length of the inital request from the beginning of response.
+    del buffer[:lenReq + 2]
+    ans = []
+
+    # only need to implement types here to see if a or ptr or cname
+
+    for i in range(a):
+        # inconsistency in location by 2 bytes
+        #print("decode name: " + str(decode_name(buffer)))
+        rtype, rclass, ttl, rdlength = struct.unpack('!HHIH', buffer[:10])
+        print(str((rtype, rclass, ttl, rdlength)))
+        #print(str(i) + " - " + str(rtype))
+        del buffer[:10]
+        #print(str(i) + " - " + str(buffer))
+        # use rtype to determine how to decode answer
+        if rtype == 1: # or type == 1:
+            ip = struct.unpack('!BBBB', buffer[:4])
+            ans.append("%d.%d.%d.%d" % ip)
+            #to adjust for the offset
+            del buffer[:4]
+        elif rtype == 5:
+            rdata = ''
+            count = 0
+            print(buffer)
+            print("IN CNAME RTYPE")
+            print(rdlength)
+            while count < rdlength:
+                if not testPtr(buffer[:2]):
+                    print("Made it here")
+                    num = struct.unpack("!B", buffer[:1])[0]
+                    del buffer[:1]
+                    rdata += buffer[:num].decode() + '.'
+                    del buffer[:num]
+                    count += num
+                else:
+                    print("PTR Detected")
+                    buffer[0] = buffer[0] & int(b'3f', 16)
+                    offset = int.from_bytes(buffer[:2], byteorder='big')
+                    num = struct.unpack('!B', data[offset:offset+1])[0]
+                    tmp = data[offset + 1:offset + num + 1].decode() + '.'
+                    rdata += tmp
+                    print(str(num) + str(tmp))
+                    print(offset)
+                    del buffer[:2]
+                    count += 2
+
+                print(buffer)
+            del buffer[0]
+            ans.append(rdata)
+            print(rdata)
+            print(buffer)
+        del buffer[:2]
+    print(ans)
 
 if __name__ == "__main__":
-    url = "yahoo.com"
+    url = "www.yahoo.com"
+    #Use type for A = 1, CNAME = 2, PTR = 3
     test()
     print()
-    dns_test()
+    #dns_test()
