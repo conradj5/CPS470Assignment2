@@ -58,6 +58,7 @@ def test():
 
 def testPtr(byte):
     res = numpy.unpackbits(byte)
+    print(str(res))
     return res[0] == 1 and res[1] == 1
 
 def parseResp(buffer, lenReq):
@@ -91,12 +92,17 @@ def parseResp(buffer, lenReq):
             print(buffer)
             print("IN CNAME RTYPE")
             print(rdlength)
-            while count < rdlength:
-                if not testPtr(buffer[:2]):
+            while count < rdlength - 1:
+                print("Count" + str(count))
+                offset = 0
+                if not testPtr(buffer[:1]):
                     print("Made it here")
                     num = struct.unpack("!B", buffer[:1])[0]
                     del buffer[:1]
+                    tmp = buffer[:num].decode() + '.'
+                    print(tmp)
                     rdata += buffer[:num].decode() + '.'
+
                     del buffer[:num]
                     count += num
                 else:
@@ -104,24 +110,27 @@ def parseResp(buffer, lenReq):
                     buffer[0] = buffer[0] & int(b'3f', 16)
                     offset = int.from_bytes(buffer[:2], byteorder='big')
                     num = struct.unpack('!B', data[offset:offset+1])[0]
-                    tmp = data[offset + 1:offset + num + 1].decode() + '.'
-                    rdata += tmp
+                    while num != 0:
+                        tmp = data[offset + 1:offset + num + 1].decode() + '.'
+                        rdata += tmp
+                        offset += num + 1
+                        num = struct.unpack('!B', data[offset:offset + 1])[0]
                     print(str(num) + str(tmp))
                     print(offset)
                     del buffer[:2]
                     count += 2
-
+                    break
                 print(buffer)
-            del buffer[0]
+            del buffer[:1]
             ans.append(rdata)
             print(rdata)
             print(buffer)
-        del buffer[:2]
+        del buffer[:1]
     print(ans)
 
 if __name__ == "__main__":
-    url = "www.yahoo.com"
+    url = "www.google.com"
     #Use type for A = 1, CNAME = 2, PTR = 3
     test()
     print()
-    #dns_test()
+    dns_test()
