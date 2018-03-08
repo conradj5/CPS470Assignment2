@@ -2,22 +2,8 @@ import socket
 from struct import pack
 from dns_test import get_default_dns
 import struct
-import dns.resolver
-import dnslib
 import numpy
 import copy
-
-
-def dns_test():
-    answers = dns.resolver.query(url, 'A')
-    request = dns.message.make_query(url, dns.rdatatype.A)
-    # m = dns.message.Message()
-    print("DNS Request: " + str(request.to_wire()))
-    response = dns.query.udp(request, get_default_dns())
-    print("DNS Response " + str(response.to_wire()))
-    print("DNS Headers " + str(struct.unpack('!HHHHHH', response.to_wire()[:12])))
-    print("\nDNSParse: ")
-    print(dnslib.DNSRecord.parse(response.to_wire()))
 
 
 def build_packet(url):
@@ -129,8 +115,6 @@ def parseResp(buffer, lenReq):
     print(ans)
 
 if __name__ == "__main__":
-    url = "www.google.com"
-    #Use type for A = 1, CNAME = 2, PTR = 3
+    url = "www.udayton.edu"
     test()
     print()
-    dns_test()
