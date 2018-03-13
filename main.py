@@ -67,6 +67,7 @@ def run(que, outq):
             outq.put(nline + " answers " + str(res))
         else:
             outq.put(nline + " No DNS entry")
+        que.task_done()
 
 
 def test_ptr(byte):
@@ -145,6 +146,7 @@ if __name__ == "__main__":
         p.daemon = True
         p.start()
         procs.append(p)
+    q.join()
     for p in procs:
         p.join()
     while outq.qsize() > 0:
