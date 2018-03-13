@@ -2,26 +2,19 @@ import socket
 from struct import pack
 from dns_test import get_default_dns
 import struct
-import dns.resolver
-import dnslib
 import numpy
 import copy
+from multiprocessing import Queue
+import re
+import multiprocessing
+from sys import argv
 
 
-def dns_test():
-    answers = dns.resolver.query(url, 'A')
-    request = dns.message.make_query(url, dns.rdatatype.A)
-    # m = dns.message.Message()
-    print("DNS Request: " + str(request.to_wire()))
-    response = dns.query.udp(request, get_default_dns())
-    print("DNS Response " + str(response.to_wire()))
-    print("DNS Headers " + str(struct.unpack('!HHHHHH', response.to_wire()[:12])))
-    print("\nDNSParse: ")
-    print(dnslib.DNSRecord.parse(response.to_wire()))
+def is_ip(addr):
+    return re.compile("^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$").match(addr)
 
 
-def build_packet(url):
-    #  packet = pack("!H", (0 << 15) | (1 << 8) | (0))  # Query Ids (Just 1 for now)
+def build_a_packet(url, type):
     packet  = pack("!H", 102)
     packet += pack("!H", int('0x0100', 16))  # Flags
     packet += pack("!H", 1)  # Questions
@@ -34,103 +27,126 @@ def build_packet(url):
         for x in range(len(encoded)):
             packet += pack("c", encoded[x:x+1])
     packet += pack("B", 0)  # End of String
-    packet += pack("!H", 1)  # Query Type
+    packet += pack("!H", type)  # Query Type
     packet += pack("!H", 1)  # Query Class
     return packet
 
 
-def test():
-    local_dns = get_default_dns()
+def execute_request(inpt):
+    if is_ip(inpt):
+        inpt = '.'.join(reversed(inpt.split('.'))) + '.in-addr.arpa'
+        dns_type = 12
+    else:
+        dns_type = 1
 
-    packet = build_packet(url)
+    packet = build_a_packet(inpt, dns_type)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    # bind to arbitrary address and port
+    sock.settimeout(5)
     sock.bind(('', 0))
-    print("Test Request: " + str(bytes(packet)))
-    print("Test Headers " + str(struct.unpack('!HHHHHH', packet[:12])))
-    sock.sendto(bytes(packet), (local_dns, 53))
-    data, addr = sock.recvfrom(1024)
-    print("Test Response " + str(data))
-    print("Test Response Headers: " + str(struct.unpack('!HHHHHH', data[:12])))
-    parseResp(bytearray(data), len(packet))
+    # print("Test Request: " + str(bytes(packet)))
+    try:
+        sock.sendto(bytes(packet), (get_default_dns(), 53))
+        data, addr = sock.recvfrom(1024)
+    except socket.timeout:
+        print("Timeout")
+        return []
     sock.close()
+    # print("Test Response " + str(data))
+    # print("Test Response Headers: " + str(struct.unpack('!HHHHHH', data[:12])))
+    ans = parse_resp(bytearray(data), len(packet))
+    print(ans)
+    return ans
 
-def testPtr(byte):
+
+def run(que, outq):
+    while que.qsize() > 0 and not que.empty():
+        nline = que.get()
+        res = execute_request(nline)
+        if res and len(res) > 0:
+            outq.put(nline + " answers " + str(res))
+        else:
+            outq.put(nline + " No DNS entry")
+
+
+def test_ptr(byte):
     res = numpy.unpackbits(byte)
-    print(str(res))
     return res[0] == 1 and res[1] == 1
 
-def parseResp(buffer, lenReq):
+
+def parse_resp(buffer, len_req):
     # For the header
     data = copy.deepcopy(buffer)
     (id, bitmap, q, a, ns, ar) = struct.unpack("!HHHHHH", buffer[:12])
 
     # Remove the total length of the inital request from the beginning of response.
-    del buffer[:lenReq + 2]
+    del buffer[:len_req + 2]
     ans = []
 
-    # only need to implement types here to see if a or ptr or cname
-
     for i in range(a):
-        # inconsistency in location by 2 bytes
-        #print("decode name: " + str(decode_name(buffer)))
         rtype, rclass, ttl, rdlength = struct.unpack('!HHIH', buffer[:10])
-        print(str((rtype, rclass, ttl, rdlength)))
-        #print(str(i) + " - " + str(rtype))
+        # print(str((rtype, rclass, ttl, rdlength)))
         del buffer[:10]
-        #print(str(i) + " - " + str(buffer))
-        # use rtype to determine how to decode answer
-        if rtype == 1: # or type == 1:
+        if rtype == 1:
             ip = struct.unpack('!BBBB', buffer[:4])
-            ans.append("%d.%d.%d.%d" % ip)
-            #to adjust for the offset
             del buffer[:4]
-        elif rtype == 5:
+            ans.append("%d.%d.%d.%d" % ip)
+            del buffer[:2]
+        elif rtype == 5 or 12:
             rdata = ''
             count = 0
-            print(buffer)
-            print("IN CNAME RTYPE")
-            print(rdlength)
             while count < rdlength - 1:
-                print("Count" + str(count))
-                offset = 0
-                if not testPtr(buffer[:1]):
-                    print("Made it here")
+                if not test_ptr(buffer[:1]):
+                    # determine the number of chars to read
                     num = struct.unpack("!B", buffer[:1])[0]
                     del buffer[:1]
-                    tmp = buffer[:num].decode() + '.'
-                    print(tmp)
+                    if num == 0:
+                        del buffer[:2]
+                        break
+                    # store the value of substring
                     rdata += buffer[:num].decode() + '.'
-
                     del buffer[:num]
                     count += num
                 else:
-                    print("PTR Detected")
                     buffer[0] = buffer[0] & int(b'3f', 16)
                     offset = int.from_bytes(buffer[:2], byteorder='big')
                     num = struct.unpack('!B', data[offset:offset+1])[0]
                     while num != 0:
-                        tmp = data[offset + 1:offset + num + 1].decode() + '.'
-                        rdata += tmp
+                        rdata += data[offset + 1:offset + num + 1].decode() + '.'
                         offset += num + 1
                         num = struct.unpack('!B', data[offset:offset + 1])[0]
-                    print(str(num) + str(tmp))
-                    print(offset)
                     del buffer[:2]
                     count += 2
                     break
-                print(buffer)
-            del buffer[:1]
+            del buffer[:2]
             ans.append(rdata)
-            print(rdata)
-            print(buffer)
-        del buffer[:1]
-    print(ans)
+    return ans
+
 
 if __name__ == "__main__":
-    url = "www.google.com"
-    #Use type for A = 1, CNAME = 2, PTR = 3
-    test()
-    print()
-    dns_test()
+    if len(argv) < 2:
+        print("Usage: python3 main.py option:[numthreads, ip, host]")
+        quit(1)
+    if is_ip(argv[1]) or not argv[1].isnumeric():
+        print (is_ip(argv[1]))
+        print(argv)
+        execute_request(inpt=argv[1])
+        quit(0)
+    q = Queue()
+    outq = Queue()
+    with open('dns-in.txt') as file:
+        file.readline()
+        file.readline()
+        for line in file.readlines():
+            q.put(line.split('\t')[0])
+    procs = []
+    for i in range(int(argv[1])):
+        p = multiprocessing.Process(target=run, args=(q,outq))
+        p.daemon = True
+        p.start()
+        procs.append(p)
+    for p in procs:
+        p.join()
+    while outq.qsize() > 0:
+        print(outq.get())
+    print("MAIN PROCESS DONE")
