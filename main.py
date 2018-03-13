@@ -4,9 +4,9 @@ from dns_test import get_default_dns
 import struct
 import numpy
 import copy
-from multiprocessing import Queue
+from threading import Thread
+from queue import Queue
 import re
-import multiprocessing
 from sys import argv
 
 
@@ -60,7 +60,7 @@ def execute_request(inpt):
 
 
 def run(que, outq):
-    while que.qsize() > 0 and not que.empty():
+    while True:
         nline = que.get()
         res = execute_request(nline)
         if res and len(res) > 0:
@@ -68,7 +68,6 @@ def run(que, outq):
         else:
             outq.put(nline + " No DNS entry")
         que.task_done()
-
 
 def test_ptr(byte):
     res = numpy.unpackbits(byte)
@@ -140,15 +139,11 @@ if __name__ == "__main__":
         file.readline()
         for line in file.readlines():
             q.put(line.split('\t')[0])
-    procs = []
     for i in range(int(argv[1])):
-        p = multiprocessing.Process(target=run, args=(q,outq))
+        p = Thread(target=run, args=(q,outq))
         p.daemon = True
         p.start()
-        procs.append(p)
     q.join()
-    for p in procs:
-        p.join()
     while outq.qsize() > 0:
         print(outq.get())
     print("MAIN PROCESS DONE")
