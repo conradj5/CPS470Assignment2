@@ -3,8 +3,7 @@ import re
 import socket
 import struct
 import time
-from multiprocessing import JoinableQueue
-from multiprocessing import Process, Lock
+from threading import Thread, Lock
 from queue import Queue
 from struct import pack
 from sys import argv
@@ -14,10 +13,6 @@ import numpy
 from dns_test import get_default_dns
 
 get_time = lambda: int(round(time.time() * 1000))
-
-STATS = {'time': 0, 'num1': 0, 'num2': 0, 'num3': 0}
-STATS_LOCK = Lock()
-
 
 def is_ip(addr):
     return re.compile("^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$").match(addr)
@@ -72,8 +67,8 @@ def execute_request(inpt):
         if rcode != 0:
             stats['time'] = 0
         with STATS_LOCK:
-            global STATS
-            STATS['time'] = STATS['time'] + stats['time']
+            for key,value in stats.items():
+                STATS[key] += value
         return ans
 
     return []
@@ -155,15 +150,17 @@ if __name__ == "__main__":
     if is_ip(argv[1]) or not argv[1].isnumeric():
         print(execute_request(inpt=argv[1]))
         quit(0)
-    q = JoinableQueue()
+    q = Queue()
     outq = Queue()
+    STATS = {'time': 0, 'num1': 0, 'num2': 0, 'num3': 0}
+    STATS_LOCK = Lock()
     with open('dns-in.txt') as file:
         file.readline()
         file.readline()
         for line in file.readlines():
             q.put(line.split('\t')[0])
     for i in range(int(argv[1])):
-        p = Process(target=run, args=(q, outq))
+        p = Thread(target=run, args=(q, outq))
         p.daemon = True
         p.start()
     q.join()
