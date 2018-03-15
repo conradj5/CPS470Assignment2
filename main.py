@@ -1,13 +1,22 @@
-import socket
-from struct import pack
-from dns_test import get_default_dns
-import struct
-import numpy
 import copy
-from threading import Thread
-from queue import Queue
 import re
+import socket
+import struct
+import time
+from multiprocessing import JoinableQueue
+from multiprocessing import Process, Lock
+from queue import Queue
+from struct import pack
 from sys import argv
+
+import numpy
+
+from dns_test import get_default_dns
+
+get_time = lambda: int(round(time.time() * 1000))
+
+STATS = {'time': 0, 'num1': 0, 'num2': 0, 'num3': 0}
+STATS_LOCK = Lock()
 
 
 def is_ip(addr):
@@ -33,6 +42,7 @@ def build_a_packet(url, type):
 
 
 def execute_request(inpt):
+    stats = {}
     if is_ip(inpt):
         inpt = '.'.join(reversed(inpt.split('.'))) + '.in-addr.arpa'
         dns_type = 12
@@ -45,29 +55,37 @@ def execute_request(inpt):
     sock.settimeout(5)
     sock.bind(('', 0))
     # print("Test Request: " + str(bytes(packet)))
-    try:
-        sock.sendto(bytes(packet), (get_default_dns(), 53))
-        data, addr = sock.recvfrom(1024)
-    except socket.timeout:
-        print("Timeout")
-        return []
+    for i in range(1, 4):
+        try:
+            start = get_time()
+            sock.sendto(bytes(packet), (get_default_dns(), 53))
+            data, addr = sock.recvfrom(1024)
+            stats['time'] = get_time() - start
+            stats['num' + str(i)] = 1
+            break
+        except socket.timeout:
+            pass
     sock.close()
-    # print("Test Response " + str(data))
-    # print("Test Response Headers: " + str(struct.unpack('!HHHHHH', data[:12])))
-    ans = parse_resp(bytearray(data), len(packet))
-    print(ans)
-    return ans
+    if data:
+        print(inpt + ' ' + str(stats) + ' ' + str(parse_resp(bytearray(data), len(packet))))
+        (ans, rcode) = parse_resp(bytearray(data), len(packet))
+        if rcode != 0:
+            stats['time'] = 0
+        with STATS_LOCK:
+            global STATS
+            STATS['time'] = STATS['time'] + stats['time']
+        return ans
+
+    return []
 
 
-def run(que, outq):
+def run(in_q, out_q):
     while True:
-        nline = que.get()
+        nline = in_q.get()
         res = execute_request(nline)
-        if res and len(res) > 0:
-            outq.put(nline + " answers " + str(res))
-        else:
-            outq.put(nline + " No DNS entry")
-        que.task_done()
+        out_q.put(nline + " answers " + str(res))
+        in_q.task_done()
+
 
 def test_ptr(byte):
     res = numpy.unpackbits(byte)
@@ -78,6 +96,13 @@ def parse_resp(buffer, len_req):
     # For the header
     data = copy.deepcopy(buffer)
     (id, bitmap, q, a, ns, ar) = struct.unpack("!HHHHHH", buffer[:12])
+
+    rcode = bitmap & 15
+
+    if rcode == 3:
+        return ['No DNS Entry'], rcode
+    if rcode == 2:
+        return ['Authoritative DNS server not found'], rcode
 
     # Remove the total length of the inital request from the beginning of response.
     del buffer[:len_req + 2]
@@ -120,7 +145,7 @@ def parse_resp(buffer, len_req):
                     break
             del buffer[:2]
             ans.append(rdata)
-    return ans
+    return ans, rcode
 
 
 if __name__ == "__main__":
@@ -128,11 +153,9 @@ if __name__ == "__main__":
         print("Usage: python3 main.py option:[numthreads, ip, host]")
         quit(1)
     if is_ip(argv[1]) or not argv[1].isnumeric():
-        print (is_ip(argv[1]))
-        print(argv)
-        execute_request(inpt=argv[1])
+        print(execute_request(inpt=argv[1]))
         quit(0)
-    q = Queue()
+    q = JoinableQueue()
     outq = Queue()
     with open('dns-in.txt') as file:
         file.readline()
@@ -140,10 +163,12 @@ if __name__ == "__main__":
         for line in file.readlines():
             q.put(line.split('\t')[0])
     for i in range(int(argv[1])):
-        p = Thread(target=run, args=(q,outq))
+        p = Process(target=run, args=(q, outq))
         p.daemon = True
         p.start()
     q.join()
     while outq.qsize() > 0:
         print(outq.get())
+
     print("MAIN PROCESS DONE")
+    print(str(STATS))
