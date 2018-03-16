@@ -37,42 +37,45 @@ def build_a_packet(url, type):
 
 
 def execute_request(inpt):
-    stats = {}
-    if is_ip(inpt):
-        inpt = '.'.join(reversed(inpt.split('.'))) + '.in-addr.arpa'
-        dns_type = 12
-    else:
-        dns_type = 1
+    try:
+        stats = {}
+        if is_ip(inpt):
+            inpt = '.'.join(reversed(inpt.split('.'))) + '.in-addr.arpa'
+            dns_type = 12
+        else:
+            dns_type = 1
 
-    packet = build_a_packet(inpt, dns_type)
+        packet = build_a_packet(inpt, dns_type)
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(5)
-    sock.bind(('', 0))
-    # print("Test Request: " + str(bytes(packet)))
-    for i in range(1, 4):
-        try:
-            start = get_time()
-            sock.sendto(bytes(packet), (get_default_dns(), 53))
-            data, addr = sock.recvfrom(1024)
-            stats['time'] = get_time() - start
-            stats['num' + str(i)] = 1
-            break
-        except socket.timeout:
-            pass
-    sock.close()
-    if data:
-        #print(inpt + ' ' + str(stats) + ' ' + str(parse_resp(bytearray(data), len(packet))))
-        (ans, rcode) = parse_resp(bytearray(data), len(packet))
-        stats['rcode' + str(rcode)] = 1
-        if rcode != 0:
-            stats['time'] = 0
-        with STATS_LOCK:
-            for key,value in stats.items():
-                STATS[key] += value
-        return ans
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(5)
+        sock.bind(('', 0))
+        # print("Test Request: " + str(bytes(packet)))
+        for i in range(1, 4):
+            try:
+                start = get_time()
+                sock.sendto(bytes(packet), (get_default_dns(), 53))
+                data, addr = sock.recvfrom(1024)
+                stats['time'] = get_time() - start
+                stats['num' + str(i)] = 1
+                break
+            except socket.timeout:
+                pass
+        sock.close()
+        if data is not None :
+            #print(inpt + ' ' + str(stats) + ' ' + str(parse_resp(bytearray(data), len(packet))))
+            (ans, rcode) = parse_resp(bytearray(data), len(packet))
+            stats['rcode' + str(rcode)] = 1
+            if rcode != 0:
+                stats['time'] = 0
+            with STATS_LOCK:
+                for key,value in stats.items():
+                    STATS[key] += value
+            return ans
 
-    return []
+        return []
+    except UnboundLocalError:
+        return []
 
 
 def run(in_q, out_q):
