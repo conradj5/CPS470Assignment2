@@ -62,8 +62,9 @@ def execute_request(inpt):
             pass
     sock.close()
     if data:
-        print(inpt + ' ' + str(stats) + ' ' + str(parse_resp(bytearray(data), len(packet))))
+        #print(inpt + ' ' + str(stats) + ' ' + str(parse_resp(bytearray(data), len(packet))))
         (ans, rcode) = parse_resp(bytearray(data), len(packet))
+        stats['rcode' + str(rcode)] = 1
         if rcode != 0:
             stats['time'] = 0
         with STATS_LOCK:
@@ -77,6 +78,8 @@ def execute_request(inpt):
 def run(in_q, out_q):
     while True:
         nline = in_q.get()
+        if in_q.qsize() % 1000 == 0:
+            print(in_q.qsize())
         res = execute_request(nline)
         out_q.put(nline + " answers " + str(res))
         in_q.task_done()
@@ -152,20 +155,28 @@ if __name__ == "__main__":
         quit(0)
     q = Queue()
     outq = Queue()
-    STATS = {'time': 0, 'num1': 0, 'num2': 0, 'num3': 0}
+    STATS = {'time': 0, 'num1': 0, 'num2': 0, 'num3': 0, 'rcode0': 0, 'rcode2': 0, 'rcode3': 0}
     STATS_LOCK = Lock()
     with open('dns-in.txt') as file:
         file.readline()
         file.readline()
-        for line in file.readlines():
+        lines = file.readlines()
+        for line in lines:
             q.put(line.split('\t')[0])
     for i in range(int(argv[1])):
         p = Thread(target=run, args=(q, outq))
         p.daemon = True
         p.start()
     q.join()
-    while outq.qsize() > 0:
-        print(outq.get())
 
+    with open('dns-out.txt', 'w+') as file:
+        while outq.qsize() > 0:
+            file.write(outq.get() + '\n')
+    print("Completed %d queries" % len(lines))
+    print("\tSuccessful: %.2f%%" % (STATS['rcode0'] / len(lines) * 100))
+    print("\tNo DNS Record: %.2f%%" % (STATS['rcode3'] / float(len(lines)) * 100))
+    print("\tLocal DNS Timeout: %.2f%%" % (STATS['rcode2'] / float(len(lines)) * 100))
+    print("\tAverage Delay: %d ms" % (STATS['time'] / len(lines)))
+    print("\tAverage retry attempts: %.2f" % ((STATS['num1'] + STATS['num2'] + STATS['num3']) / len(lines)))
     print("MAIN PROCESS DONE")
     print(str(STATS))
