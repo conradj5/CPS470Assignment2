@@ -4,7 +4,7 @@ from dns_test import get_default_dns
 import struct
 import numpy
 import copy
-
+import sys
 
 def build_packet(url):
     #  packet = pack("!H", (0 << 15) | (1 << 8) | (0))  # Query Ids (Just 1 for now)
@@ -25,7 +25,7 @@ def build_packet(url):
     return packet
 
 
-def test():
+def test(url):
     local_dns = get_default_dns()
 
     packet = build_packet(url)
@@ -33,18 +33,13 @@ def test():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     # bind to arbitrary address and port
     sock.bind(('', 0))
-    print("Test Request: " + str(bytes(packet)))
-    print("Test Headers " + str(struct.unpack('!HHHHHH', packet[:12])))
     sock.sendto(bytes(packet), (local_dns, 53))
     data, addr = sock.recvfrom(1024)
-    print("Test Response " + str(data))
-    print("Test Response Headers: " + str(struct.unpack('!HHHHHH', data[:12])))
-    parseResp(bytearray(data), len(packet))
     sock.close()
-
+    parseResp(bytearray(data), len(packet))
+    
 def testPtr(byte):
     res = numpy.unpackbits(byte)
-    print(str(res))
     return res[0] == 1 and res[1] == 1
 
 def parseResp(buffer, lenReq):
@@ -60,13 +55,8 @@ def parseResp(buffer, lenReq):
 
     for i in range(a):
         # inconsistency in location by 2 bytes
-        #print("decode name: " + str(decode_name(buffer)))
         rtype, rclass, ttl, rdlength = struct.unpack('!HHIH', buffer[:10])
-        print(str((rtype, rclass, ttl, rdlength)))
-        #print(str(i) + " - " + str(rtype))
         del buffer[:10]
-        #print(str(i) + " - " + str(buffer))
-        # use rtype to determine how to decode answer
         if rtype == 1: # or type == 1:
             ip = struct.unpack('!BBBB', buffer[:4])
             ans.append("%d.%d.%d.%d" % ip)
@@ -75,24 +65,17 @@ def parseResp(buffer, lenReq):
         elif rtype == 5:
             rdata = ''
             count = 0
-            print(buffer)
-            print("IN CNAME RTYPE")
-            print(rdlength)
             while count < rdlength - 1:
-                print("Count" + str(count))
                 offset = 0
                 if not testPtr(buffer[:1]):
-                    print("Made it here")
                     num = struct.unpack("!B", buffer[:1])[0]
                     del buffer[:1]
                     tmp = buffer[:num].decode() + '.'
-                    print(tmp)
                     rdata += buffer[:num].decode() + '.'
 
                     del buffer[:num]
                     count += num
                 else:
-                    print("PTR Detected")
                     buffer[0] = buffer[0] & int(b'3f', 16)
                     offset = int.from_bytes(buffer[:2], byteorder='big')
                     num = struct.unpack('!B', data[offset:offset+1])[0]
@@ -101,20 +84,16 @@ def parseResp(buffer, lenReq):
                         rdata += tmp
                         offset += num + 1
                         num = struct.unpack('!B', data[offset:offset + 1])[0]
-                    print(str(num) + str(tmp))
-                    print(offset)
                     del buffer[:2]
                     count += 2
                     break
-                print(buffer)
             del buffer[:1]
             ans.append(rdata)
-            print(rdata)
-            print(buffer)
         del buffer[:1]
     print(ans)
 
 if __name__ == "__main__":
-    url = "www.udayton.edu"
-    test()
-    print()
+    if len(sys.argv) < 2:
+        print('Useage: main.py <valid domain>')
+        exit(1)
+    test(sys.argv[1])
